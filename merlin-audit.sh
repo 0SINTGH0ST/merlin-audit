@@ -54,7 +54,7 @@ GH_REL="https://api.github.com/repos/RMerl/asuswrt-merlin.ng/releases/latest"
 
 CRIT=0; HIGH=0; MED=0; LOW=0; PASS=0
 CATEGORY="general"
-HAVE_JQ=0; command -v jq >/dev/null 2>&1 && HAVE_JQ=1
+HAVE_JQ=0; which jq >/dev/null 2>&1 && HAVE_JQ=1
 
 if [ -t 1 ] && [ $JSON = 0 ]; then
   R='\033[1;31m'; Y='\033[1;33m'; G='\033[1;32m'; B='\033[1;36m'; M='\033[1;35m'; N='\033[0m'
@@ -79,7 +79,7 @@ nv() { nvram get "$1" 2>/dev/null; }
 
 out "${B}merlin-audit v$VERSION — OSINTGH0ST${N}"
 out "Started: $(date)"
-command -v nvram >/dev/null 2>&1 || { out "${R}nvram not found — run this on the router.${N}"; exit 1; }
+which nvram >/dev/null 2>&1 || { out "${R}nvram not found — run this on the router.${N}"; exit 1; }
 
 # ─────────────────────────────────────────────────────────────
 hdr "SYSTEM"
@@ -211,7 +211,7 @@ done
 
 # ─────────────────────────────────────────────────────────────
 hdr "VPN PEERS"
-if command -v wg >/dev/null 2>&1; then
+if which wg >/dev/null 2>&1; then
   wg show all 2>/dev/null | grep -E 'interface|peer|endpoint|latest handshake|allowed ips' | while read -r l; do info "$l"; done
   wg show all allowed-ips 2>/dev/null | grep -q '0.0.0.0/0' && low "A WireGuard peer has allowed-ips 0.0.0.0/0 (full tunnel) — confirm intended"
 else
@@ -226,7 +226,7 @@ done
 # ─────────────────────────────────────────────────────────────
 hdr "TLS CERTIFICATE (Web UI)"
 CERT=/etc/cert.pem; [ -f /jffs/.cert/cert.pem ] && CERT=/jffs/.cert/cert.pem
-if [ -f "$CERT" ] && command -v openssl >/dev/null 2>&1; then
+if [ -f "$CERT" ] && which openssl >/dev/null 2>&1; then
   END=$(openssl x509 -enddate -noout -in "$CERT" 2>/dev/null | cut -d= -f2)
   BITS=$(openssl x509 -text -noout -in "$CERT" 2>/dev/null | grep -oE 'Public-Key: \([0-9]+ bit\)' | grep -oE '[0-9]+')
   SIG=$(openssl x509 -text -noout -in "$CERT" 2>/dev/null | grep 'Signature Algorithm' | head -1 | awk '{print $NF}')
@@ -251,18 +251,18 @@ check_script() {
 }
 check_script "firewall-start" "/jffs/scripts/firewall-start"
 check_script "services-start"  "/jffs/scripts/services-start"
-if [ -d /jffs/addons/skynet ] || command -v firewall >/dev/null 2>&1; then
+if [ -d /jffs/addons/skynet ] || which firewall >/dev/null 2>&1; then
   ok "Skynet addon directory present"
   for set in Skynet-Blacklist Skynet-BlockedRanges Skynet-Whitelist; do
-    if command -v ipset >/dev/null 2>&1; then
-      N=$(ipset -t list "$set" 2>/dev/null | grep -i 'Number of entries' | grep -oE '[0-9]+')
-      [ -n "$N" ] && info "ipset $set: $N entries loaded"
+    if which ipset >/dev/null 2>&1; then
+      CNT=$(ipset -t list "$set" 2>/dev/null | grep -i 'Number of entries' | grep -oE '[0-9]+')
+      [ -n "$CNT" ] && info "ipset $set: $CNT entries loaded"
     fi
   done
 else info "Skynet not detected"; fi
 [ -d /jffs/addons/diversion ] && ok "Diversion addon present" || info "Diversion not detected"
 # confirm firewall actually has rules loaded (defense is live, not just installed)
-if command -v iptables >/dev/null 2>&1; then
+if which iptables >/dev/null 2>&1; then
   NR=$(iptables -S 2>/dev/null | wc -l)
   [ "$NR" -gt 10 ] && ok "iptables has $NR rules loaded" || high "iptables nearly empty ($NR rules) — firewall may not be active"
 fi
@@ -314,7 +314,7 @@ if [ $CONNTRACK = 1 ]; then
       esac
     done
     # cross-reference Skynet blacklist if loaded
-    if command -v ipset >/dev/null 2>&1 && ipset list Skynet-Blacklist >/dev/null 2>&1; then
+    if which ipset >/dev/null 2>&1 && ipset list Skynet-Blacklist >/dev/null 2>&1; then
       grep -oE 'dst=[0-9.]+' "$CT" | cut -d= -f2 | sort -u | while read -r d; do
         ipset test Skynet-Blacklist "$d" 2>/dev/null && high "  Outbound to $d — present in Skynet blacklist"
       done
@@ -329,12 +329,13 @@ if [ "$(nv jffs2_scripts)" = "1" ]; then
   for f in /jffs/scripts/*; do
     [ -f "$f" ] || continue
     info "  $(ls -l "$f" | awk '{print $1,$6,$7,$8}')  $(basename "$f")  md5:$(md5sum "$f" | cut -c1-12)"
-    grep -nE 'wget|curl|nc |/dev/tcp|base64 -d|chmod \+x /tmp|telnetd|dropbear .*-p' "$f" 2>/dev/null | head -5 | while read -r l; do
-      med "  suspicious line in $(basename "$f"): $l"
+    # only genuinely dangerous patterns — not every curl (addons fetch data legitimately)
+    grep -nE '(curl|wget|fetch)[^|]*\|[[:space:]]*(sh|bash|ash)([[:space:]]|$)|/dev/tcp/|base64[[:space:]]+-d[^|]*\|[[:space:]]*(sh|bash)|chmod[[:space:]]+\+?x[[:space:]]+/tmp|telnetd[[:space:]]+-l|nc[[:space:]]+.*-e[[:space:]]|mkfifo.*\|.*(sh|bash)' "$f" 2>/dev/null | head -5 | while read -r l; do
+      high "  suspicious line in $(basename "$f"): $l"
     done
   done
 fi
-if command -v cru >/dev/null 2>&1; then
+if which cru >/dev/null 2>&1; then
   CRON=$(cru l 2>/dev/null)
   [ -n "$CRON" ] && { info "Cron jobs:"; echo "$CRON" | while read -r c; do info "  $c"; done; }
   echo "$CRON" | grep -qE '/tmp/[^ ]*\.(sh|bin)|wget|curl .*\|' && high "Cron runs files from /tmp or pipes downloads — inspect"
@@ -344,9 +345,20 @@ if [ -n "$TMPX" ]; then
   low "Executables in /tmp (often normal, malware also lives here):"
   echo "$TMPX" | while read -r f; do info "  $f"; done
 else ok "No stray executables in /tmp"; fi
-ps w 2>/dev/null | grep -E '/tmp/[^ ]+|\./[a-z0-9]{6,}' | grep -v grep | grep -v merlin-audit | while read -r p; do
-  high "Process running from /tmp: $p"
+# flag only when the EXECUTABLE itself lives in /tmp (real malware signal) —
+# not when /tmp merely appears in a daemon's args (hostapd/udhcpc/dcd configs)
+FOUND_TMPEXE=0
+for pid in $(ls /proc 2>/dev/null | grep -E '^[0-9]+$'); do
+  exe=$(readlink "/proc/$pid/exe" 2>/dev/null)
+  case "$exe" in
+    # /tmp/mnt and /tmp/opt are USB/Entware persistent mounts, not volatile tmpfs — skip
+    /tmp/mnt/*|/tmp/opt/*) : ;;
+    /tmp/*|/var/tmp/*)
+      FOUND_TMPEXE=1
+      high "Process executable in volatile /tmp: pid $pid -> $exe ($(cat /proc/$pid/comm 2>/dev/null))" ;;
+  esac
 done
+[ $FOUND_TMPEXE = 0 ] && ok "No process running from a /tmp executable"
 
 # ─────────────────────────────────────────────────────────────
 hdr "BASELINE INTEGRITY DIFF"
@@ -354,7 +366,7 @@ CUR="$WORK/cur.$STAMP"; mkdir -p "$CUR"
 netstat -lntu 2>/dev/null | awk 'NR>2{print $1,$4}' | sort -u            > "$CUR/ports"
 nv sshd_authkeys | tr '>' '\n' | grep -v '^$'                            > "$CUR/authkeys"
 ( for f in /jffs/scripts/*; do [ -f "$f" ] && echo "$(md5sum "$f")"; done ) 2>/dev/null > "$CUR/scripts"
-( command -v cru >/dev/null 2>&1 && cru l 2>/dev/null )                   > "$CUR/cron"
+( which cru >/dev/null 2>&1 && cru l 2>/dev/null )                   > "$CUR/cron"
 ( echo "$RESOLVERS" | tr ' ' '\n' | grep -v '^$' | sort -u )              > "$CUR/dns"
 nv sshd_port                                                             > "$CUR/sshport"
 
@@ -403,7 +415,7 @@ v=$(lighttpd -v 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1);     
 [ $KERNEL = 1 ] && { v=$(uname -r | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+'); add kernel "linux:linux_kernel" "$v"; }
 
 # Entware packages — CVE-scan a curated network-facing allowlist only
-if command -v opkg >/dev/null 2>&1; then
+if which opkg >/dev/null 2>&1; then
   info "Entware packages installed: $(opkg list-installed 2>/dev/null | wc -l)"
   opkg list-installed 2>/dev/null | while read -r pkg _ ver; do
     cpe=""
@@ -475,7 +487,7 @@ if [ $OFFLINE = 0 ]; then
   if [ -s "$KEV" ] && [ $HAVE_JQ = 1 ]; then
     hdr "ASUS ENTRIES IN CISA KEV (actively exploited)"
     info "Confirm each is fixed in firmware $FW:"
-    jq -r '.vulnerabilities[] | select(.vendorProject|test("asus";"i")) | "\(.dateAdded)  \(.cveID)  \(.product): \(.vulnerabilityName)"' "$KEV" \
+    jq -r '.vulnerabilities[] | select((.vendorProject|ascii_downcase)|contains("asus")) | "\(.dateAdded)  \(.cveID)  \(.product): \(.vulnerabilityName)"' "$KEV" \
       | sort -r | while read -r l; do info "  $l"; done
   fi
 fi
